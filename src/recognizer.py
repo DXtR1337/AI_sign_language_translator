@@ -3,7 +3,7 @@ import numpy as np
 import custom_landmarks
 import logging
 from camera import CameraApp
-from PySide6.QtCore import Signal, QObject, QSize, Qt
+from PySide6.QtCore import Signal, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QImage
 from mediapipe import solutions, Image, ImageFormat
 from mediapipe.framework.formats import landmark_pb2
@@ -36,6 +36,7 @@ class GestureRecognizerApp(QObject):
     A class to represent the gesture recognizer application.
     """
     result_ready_signal = Signal(object, list, list, int)
+    recognize_next_signal = Signal()
 
     def __init__(self, model: str, num_hands: int, min_hand_detection_confidence: float,
                  min_hand_presence_confidence: float, min_tracking_confidence: float, score_confidence: float,
@@ -62,6 +63,8 @@ class GestureRecognizerApp(QObject):
         self.score_confidence = score_confidence
         self.recognizer = None
         self._closing = False
+        self._inference_pending = False
+        self._retry_delay_ms = 50
         self.cap = camera
 
         self.last_timestamp = 0
@@ -72,12 +75,17 @@ class GestureRecognizerApp(QObject):
         self.mp_hands = solutions.hands
         self.mp_drawing = solutions.drawing_utils
         self.drawing_styles = custom_landmarks
+        self.recognize_next_signal.connect(
+            self.recognize_frame,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def create_recognizer(self):
         """
         Initialize the gesture recognizer with the specified model and options.
         """
         self._closing = False
+        self._inference_pending = False
         classifier_options = processors.ClassifierOptions(
             display_names_locale=None,
             max_results=1,
@@ -111,29 +119,38 @@ class GestureRecognizerApp(QObject):
             output_image (Image): The processed output image.
             timestamp_ms (int): The timestamp of the result in milliseconds.
         """
+        self._inference_pending = False
         try:
             frame, text, category_name = self.process_recognition_result(
                 output_image.numpy_view().copy(), result
             )
             self.calculate_fps()
             self.result_ready_signal.emit(create_scaled_qimage(frame), text, category_name, self.fps)
-
-            if self.recognizer and not self._closing:
-                self.recognize_frame()
         except Exception as e:
             if not self._closing:
                 logging.error(f"Error handling recognition result: {e}")
+        finally:
+            if self.recognizer and not self._closing:
+                self.recognize_next_signal.emit()
 
     def calculate_fps(self):
         """
         Calculate the frames per second (FPS).
         """
-        if self.fps_counter % 5 == 0:
-            latest_fps_value = 5.0 / (time.time() - self.start_time)
-            self.start_time = time.time()
-            self.fps = latest_fps_value
-
         self.fps_counter += 1
+        if self.fps_counter < 5:
+            return
+
+        current_time = time.time()
+        elapsed = current_time - self.start_time
+        self.fps = round(5.0 / elapsed) if elapsed > 0 else 0
+        self.start_time = current_time
+        self.fps_counter = 0
+
+    def _schedule_retry(self):
+        """Retry capture without blocking the GUI or MediaPipe worker thread."""
+        if self.recognizer and not self._closing:
+            QTimer.singleShot(self._retry_delay_ms, self.recognize_frame)
 
     def recognize_frame(self):
         """
@@ -142,27 +159,36 @@ class GestureRecognizerApp(QObject):
         Returns:
             None: The function does not return a value but processes the frame asynchronously.
         """
-        if self._closing or self.cap.is_closed() or self.recognizer is None:
+        if self._closing or self.recognizer is None:
+            return
+
+        if self._inference_pending:
+            return
+
+        if self.cap.is_closed():
             logging.warning("Camera is not opened or recognizer is not initialized.")
             return
 
         timestamp, image = self.cap.read()
 
-        while timestamp <= self.last_timestamp:
+        while image is not None and timestamp <= self.last_timestamp:
             logging.warning(f"Skipping outdated frame: {timestamp}")
             timestamp, image = self.cap.read()
 
         if image is not None:
             try:
                 mp_image = Image(image_format=ImageFormat.SRGB, data=image.astype(np.uint8))
+                self.last_timestamp = timestamp
+                self._inference_pending = True
                 self.recognizer.recognize_async(mp_image, timestamp // 1_000_000)
             except Exception as e:
+                self._inference_pending = False
                 if not self._closing:
                     logging.error(f"Exception in recognizer: {e}")
-            finally:
-                self.last_timestamp = timestamp
+                    self._schedule_retry()
         else:
             logging.warning("No valid image to recognize.")
+            self._schedule_retry()
 
     def process_recognition_result(self, frame, result):
         """
@@ -207,6 +233,7 @@ class GestureRecognizerApp(QObject):
         Release resources.
         """
         self._closing = True
+        self._inference_pending = False
         if self.recognizer:
             self.recognizer.close()
             self.recognizer = None

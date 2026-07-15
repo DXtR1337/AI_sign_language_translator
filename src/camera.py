@@ -13,14 +13,17 @@ class CameraApp:
                       Expected keys:
                       - fd (int or str): File descriptor or device index.
         """
+        self.cap = None
         try:
             self.cap = cv2.VideoCapture()
-            self.open(kwargs["fd"])
-        except Exception:
-            logging.error("Error while initializing the camera")
-            self.destroy()
-        finally:
+            self.open(
+                kwargs["fd"],
+                kwargs.get("camera_driver", cv2.CAP_DSHOW),
+            )
             self.configure(**kwargs)
+        except Exception:
+            logging.exception("Error while initializing the camera")
+            self.destroy()
 
     def settings(self):
         if self.cap is not None:
@@ -41,10 +44,14 @@ class CameraApp:
         try:
             if self.cap is None:
                 self.cap = cv2.VideoCapture()
-            self.cap.open(fd, camera_driver)
+            opened = self.cap.open(fd, camera_driver)
+            if not opened:
+                logging.error("Could not open camera %s with backend %s", fd, camera_driver)
+            return opened
         except Exception:
-            logging.error("Error while opening the camera")
+            logging.exception("Error while opening the camera")
             self.destroy()
+            return False
 
     def destroy(self):
         if self.cap is not None and self.cap.isOpened():

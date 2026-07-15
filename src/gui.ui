@@ -1121,7 +1121,7 @@
        <item row="3" column="0">
         <widget class="QLabel" name="label_treshold">
          <property name="text">
-          <string>Treshold</string>
+          <string>Threshold</string>
          </property>
         </widget>
        </item>
@@ -1250,7 +1250,7 @@
           <number>1</number>
          </property>
          <property name="maximum">
-          <number>105</number>
+          <number>100</number>
          </property>
          <property name="singleStep">
           <number>10</number>

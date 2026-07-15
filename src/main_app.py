@@ -1,6 +1,6 @@
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 from recognizer import GestureRecognizerApp
 from gui import *
 from speaker import SpeakerApp
@@ -24,7 +24,6 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.setupUi(self)
 
         self.driver_names = {}
-        self.driver_names_inv = {}
         self.camera_app = None
         self.recognizer_app = None
         self.tts_app = None
@@ -99,20 +98,24 @@ class MainApp(QMainWindow, Ui_MainWindow):
             cv2.CAP_UEYE: "uEye",
             cv2.CAP_OBSENSOR: "OB Sensor"
         }
-        self.driver_names_inv = {v: k for k, v in self.driver_names.items()}
 
     def populate_camera_drivers(self):
         """
         Populate the camera drivers combo box with available drivers.
         """
         self.comboBox_drivers.clear()
-        self.comboBox_drivers.addItem(self.driver_names.get(0, "ANY"))
+        self.comboBox_drivers.addItem(self.driver_names.get(cv2.CAP_ANY, "Auto"), cv2.CAP_ANY)
         drivers = cv2.videoio_registry.getCameraBackends()
 
         for driver in drivers:
+            if driver == cv2.CAP_ANY:
+                continue
             name = self.driver_names.get(driver, f"Unknown ({driver})")
-            self.comboBox_drivers.addItem(name)
-        self.comboBox_drivers.setCurrentIndex(0)
+            self.comboBox_drivers.addItem(name, driver)
+
+        default_driver = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+        default_index = self.comboBox_drivers.findData(default_driver)
+        self.comboBox_drivers.setCurrentIndex(max(default_index, 0))
 
     def populate_cameras(self):
         """
@@ -132,8 +135,10 @@ class MainApp(QMainWindow, Ui_MainWindow):
         file_path, _ = QFileDialog.getOpenFileName(self, "Choose model file", str(MODEL_DIRECTORY), "Files .task (*.task)")
 
         if file_path:
+            previous_model_path = self.model_path
             self.model_path = file_path
-            self.reset_recognizer()
+            if not self.reset_recognizer():
+                self.model_path = previous_model_path
 
     def pushbutton_camera_settings_click(self):
         """
@@ -149,21 +154,39 @@ class MainApp(QMainWindow, Ui_MainWindow):
         try:
             self.populate_cameras()
             self.populate_camera_drivers()
-            self.camera_app = CameraApp(fd=self.comboBox_cameras.currentIndex(), width=self.spinBox_camera_width.value(),
-                                        height=self.spinBox_camera_height.value())
-        except Exception as e:
-            logging.error(f"Error while initializing camera: {e.args}")
+            camera_id = self.comboBox_cameras.currentData()
+            camera_driver = self.comboBox_drivers.currentData()
+            self.camera_app = CameraApp(
+                fd=0 if camera_id is None else camera_id,
+                camera_driver=cv2.CAP_ANY if camera_driver is None else camera_driver,
+                width=self.spinBox_camera_width.value(),
+                height=self.spinBox_camera_height.value(),
+            )
+        except Exception:
+            logging.exception("Error while initializing camera")
 
     def reset_camera(self):
         """
         Reset the camera application with new settings and start recognizing frames.
         """
-        try:
-            self.camera_app.open(fd=self.comboBox_cameras.currentIndex(), camera_driver=self.driver_names_inv.get(self.comboBox_drivers.currentText()))
-            self.camera_app.configure(width=self.spinBox_camera_width.value(), height=self.spinBox_camera_height.value())
+        if self.camera_app is None:
+            return False
 
-        except Exception as e:
-            logging.error(f"Error while resetting camera: {e.args}")
+        try:
+            camera_id = self.comboBox_cameras.currentData()
+            camera_driver = self.comboBox_drivers.currentData()
+            opened = self.camera_app.open(
+                fd=0 if camera_id is None else camera_id,
+                camera_driver=cv2.CAP_ANY if camera_driver is None else camera_driver,
+            )
+            self.camera_app.configure(
+                width=self.spinBox_camera_width.value(),
+                height=self.spinBox_camera_height.value(),
+            )
+            return opened
+        except Exception:
+            logging.exception("Error while resetting camera")
+            return False
 
     def reset_tts(self):
         """
@@ -180,25 +203,40 @@ class MainApp(QMainWindow, Ui_MainWindow):
         """
         Reset the gesture recognizer with new settings.
         """
-        if self.recognizer_app is not None:
-            if self.recognizer_app.result_ready_signal:
-                self.recognizer_app.result_ready_signal.disconnect()
-            self.recognizer_app.close()
-            self.recognizer_app = None
+        if self.camera_app is None:
+            return False
 
-        if self.camera_app is not None:
-            self.recognizer_app = GestureRecognizerApp(
-                model=self.model_path,
-                num_hands=1,
-                min_hand_detection_confidence=(self.spinBox_detection.value() / 100.0),
-                min_hand_presence_confidence=(self.spinBox_presence.value() / 100.0),
-                min_tracking_confidence=(self.spinBox_tracking.value() / 100.0),
-                score_confidence=(self.spinBox_treshold.value() / 100.0),
-                camera=self.camera_app
+        candidate = GestureRecognizerApp(
+            model=self.model_path,
+            num_hands=1,
+            min_hand_detection_confidence=(self.spinBox_detection.value() / 100.0),
+            min_hand_presence_confidence=(self.spinBox_presence.value() / 100.0),
+            min_tracking_confidence=(self.spinBox_tracking.value() / 100.0),
+            score_confidence=(self.spinBox_treshold.value() / 100.0),
+            camera=self.camera_app,
+        )
+
+        try:
+            candidate.create_recognizer()
+        except Exception:
+            candidate.close()
+            logging.exception("Could not load gesture recognizer model: %s", self.model_path)
+            QMessageBox.critical(
+                self,
+                "Model error",
+                f"Could not load model: {Path(self.model_path).name}",
             )
-            self.recognizer_app.result_ready_signal.connect(self.process_result_and_frame)
-            self.recognizer_app.create_recognizer()
-            self.recognizer_app.recognize_frame()
+            return False
+
+        previous_recognizer = self.recognizer_app
+        if previous_recognizer is not None:
+            previous_recognizer.result_ready_signal.disconnect()
+            previous_recognizer.close()
+
+        self.recognizer_app = candidate
+        self.recognizer_app.result_ready_signal.connect(self.process_result_and_frame)
+        self.recognizer_app.recognize_frame()
+        return True
 
     def start(self):
         """
@@ -298,8 +336,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         """
         Reset Camera.
         """
-        self.reset_camera()
-        if self.recognizer_app is not None:
+        if self.reset_camera() and self.recognizer_app is not None:
             self.recognizer_app.recognize_frame()
 
     def closeEvent(self, event):
