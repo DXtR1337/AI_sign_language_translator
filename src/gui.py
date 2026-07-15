@@ -344,7 +344,7 @@ class Ui_MainWindow(object):
         self.pushButton_resetTTS.setObjectName(u"pushButton_resetTTS")
         self.pushButton_resetTTS.setGeometry(QRect(10, 140, 151, 31))
         self.pushButton_resetTTS.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.pushButton_resetTTS.setStyleSheet(u"file:///C:/Users/Kamil/Downloads/Chatbee.qss")
+        self.pushButton_resetTTS.setStyleSheet(u"")
         self.pushButton_resetRecognizer = QPushButton(self.groupBox)
         self.pushButton_resetRecognizer.setObjectName(u"pushButton_resetRecognizer")
         self.pushButton_resetRecognizer.setGeometry(QRect(130, 160, 91, 31))

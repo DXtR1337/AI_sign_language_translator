@@ -13,7 +13,6 @@ class SpeakerApp:
         self.set_volume(volume)
         self._thread = None
         self._lock = threading.Lock()
-        self._stop_event = threading.Event()
         self._set_default_voice(ENGINE)
 
     def set_rate(self, rate=150):
@@ -26,26 +25,24 @@ class SpeakerApp:
 
     def _set_default_voice(self, voice_engine=ENGINE):
         """Set the default voice."""
-        self.engine.setProperty('voice', voice_engine)
+        voices = self.engine.getProperty('voices') or []
+        if any(voice.id == voice_engine for voice in voices):
+            self.engine.setProperty('voice', voice_engine)
 
     def speak(self, text=""):
         """Speak the given text, managing concurrent speech requests."""
+        if not text:
+            return
+
         with self._lock:
             if self._thread and self._thread.is_alive():
-                self._stop_event.set()
+                return
 
-            self._stop_event.clear()
-            self._thread = threading.Thread(target=self._speak, args=(text,))
+            self._thread = threading.Thread(target=self._speak, args=(text,), daemon=True)
             self._thread.start()
 
     def _speak(self, text=""):
         """Internal method to handle the speech synthesis."""
-
-        def on_end():
-            if self._stop_event.is_set():
-                self.engine.stop()
-
-        self.engine.connect('finished-utterance', on_end)
         self.engine.say(text)
         try:
             self.engine.runAndWait()
@@ -55,7 +52,7 @@ class SpeakerApp:
     def stop(self):
         """Stop the speech synthesis."""
         with self._lock:
-            if self._thread and self._thread.is_alive():
-                self._stop_event.set()
-                self._thread.join()
             self.engine.stop()
+            if self._thread and self._thread.is_alive():
+                self._thread.join()
+            self._thread = None

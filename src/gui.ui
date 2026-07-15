@@ -1349,7 +1349,7 @@
        <cursorShape>PointingHandCursor</cursorShape>
       </property>
       <property name="styleSheet">
-       <string notr="true">file:///C:/Users/Kamil/Downloads/Chatbee.qss</string>
+       <string notr="true"/>
       </property>
       <property name="text">
        <string>Reset</string>

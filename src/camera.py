@@ -23,11 +23,13 @@ class CameraApp:
             self.configure(**kwargs)
 
     def settings(self):
-        if self.cap:
+        if self.cap is not None:
             self.cap.set(cv2.CAP_PROP_SETTINGS, 1)
 
     def configure(self, **kwargs):
         try:
+            if self.cap is None:
+                return
             self.cap.set(cv2.CAP_PROP_FPS, 30)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, kwargs["width"])
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, kwargs["height"])
@@ -37,18 +39,20 @@ class CameraApp:
 
     def open(self, fd=0, camera_driver=cv2.CAP_DSHOW):
         try:
+            if self.cap is None:
+                self.cap = cv2.VideoCapture()
             self.cap.open(fd, camera_driver)
         except Exception:
             logging.error("Error while opening the camera")
             self.destroy()
 
     def destroy(self):
-        if self.cap.isOpened():
+        if self.cap is not None and self.cap.isOpened():
             self.cap.release()
-            self.cap = None
+        self.cap = None
 
     def is_closed(self):
-        return not self.cap.isOpened()
+        return self.cap is None or not self.cap.isOpened()
 
     def read(self):
         """
@@ -60,7 +64,7 @@ class CameraApp:
                 - numpy.ndarray or None: The captured frame in RGB format,
                   or None if the capture failed.
         """
-        if self.cap.isOpened():
+        if self.cap is not None and self.cap.isOpened():
             ret, frame = self.cap.read()
             if ret:
                 return time.time_ns(), cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

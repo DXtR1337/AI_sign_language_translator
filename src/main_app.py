@@ -1,4 +1,5 @@
 from PySide6.QtMultimedia import QMediaDevices
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFileDialog
 from recognizer import GestureRecognizerApp
 from gui import *
@@ -10,7 +11,8 @@ import sys
 
 
 PROJECT_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
-MODEL_PATH = str(PROJECT_ROOT / 'models' / 'gesture_recognizer_asl_0.task')
+MODEL_DIRECTORY = PROJECT_ROOT / 'models'
+MODEL_PATH = str(MODEL_DIRECTORY / 'gesture_recognizer_asl_0.task')
 
 
 class MainApp(QMainWindow, Ui_MainWindow):
@@ -127,7 +129,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         """
         Open a file dialog to select a model file and reset the recognizer with the new model.
         """
-        file_path, _ = QFileDialog.getOpenFileName(self, "Choose model file", "../models", "Files .task (*.task)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Choose model file", str(MODEL_DIRECTORY), "Files .task (*.task)")
 
         if file_path:
             self.model_path = file_path
@@ -239,7 +241,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 sign_scores[sign] = score
 
         most_common_sign = max(sign_count, key=sign_count.get)
-        average_score = sign_scores[most_common_sign] / self.last_results_length
+        average_score = sign_scores[most_common_sign] / sign_count[most_common_sign]
 
         return most_common_sign, average_score
 
@@ -248,14 +250,14 @@ class MainApp(QMainWindow, Ui_MainWindow):
         Update the UI with the processed frame and recognized gesture text.
 
         Args:
-            frame (QPixmap): The processed frame.
+            frame (QImage): The processed frame.
             text (list): Recognized gesture text.
             scores (list): Scores of the recognized gestures.
             latest_fps (int): The latest frames per second (FPS) value.
         """
 
         if frame:
-            self.label_displayFrame.setPixmap(frame)
+            self.label_displayFrame.setPixmap(QPixmap.fromImage(frame))
 
         if latest_fps:
             self.label_displayFPS.setText(f'{latest_fps} FPS')
@@ -297,7 +299,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
         Reset Camera.
         """
         self.reset_camera()
-        self.recognizer_app.recognize_frame()
+        if self.recognizer_app is not None:
+            self.recognizer_app.recognize_frame()
 
     def closeEvent(self, event):
         """
