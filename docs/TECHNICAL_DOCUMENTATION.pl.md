@@ -35,7 +35,7 @@ Rozpoznawane klasy to **24 statyczne litery alfabetu ASL** (A–Y, z pominięcie
 
 | Warstwa | Technologia | Rola |
 |---|---|---|
-| Język | Python 3.9–3.12 | Logika aplikacji |
+| Język | Python 3.10 lub 3.12 | Logika aplikacji |
 | Inferencja ML | [MediaPipe Tasks](https://ai.google.dev/edge/mediapipe) ≥ 0.10.14, < 0.10.30 (`GestureRecognizer`) | Detekcja i śledzenie dłoni oraz klasyfikacja gestów (TFLite) |
 | Serializacja | Lokalnie poprawiony protobuf 4.25.9 | Komunikaty MediaPipe; backport poprawki parsera, wheel UPB dla Windows x64/Python 3.10+ i fallback pure-Python w pozostałych środowiskach |
 | Trening ML | MediaPipe Model Maker, TensorFlow 2 (Google Colab) | Trening własnej głowicy klasyfikacyjnej |
@@ -78,7 +78,7 @@ flowchart TB
 
 ### 3.2 Pętla rozpoznawania i model wątkowości
 
-`GestureRecognizer` MediaPipe pracuje w trybie **`RunningMode.LIVE_STREAM`** — `recognize_async()` zwraca sterowanie natychmiast, a wynik dostarczany jest później w wątku roboczym MediaPipe poprzez `result_callback`. Aplikacja wykorzystuje to do zbudowania **samopodtrzymującej się pętli asynchronicznej**, bez osobnego wątku przechwytywania ani timera:
+`GestureRecognizer` MediaPipe pracuje w trybie **`RunningMode.LIVE_STREAM`** — `recognize_async()` zwraca sterowanie natychmiast, a wynik dostarczany jest później w wątku roboczym MediaPipe poprzez `result_callback`. Odporna pętla asynchroniczna jest koordynowana kolejkowanym sygnałem Qt. Krótki `QTimer` jest używany tylko do ponowienia po chwilowym błędzie odczytu lub wysłania klatki:
 
 ```mermaid
 sequenceDiagram
@@ -97,14 +97,16 @@ sequenceDiagram
     R--)M: result_ready_signal.emit(obraz, tekst, wyniki, fps)
     Note over M: głosowanie w oknie przesuwnym,<br/>aktualizacja etykiet i pasków
     M--)T: speak(litera)  [jeśli włączone]
-    R->>R: recognize_frame()  → kolejna iteracja
+    R--)M: recognize_next_signal (kolejkowany)
+    M->>R: recognize_frame()  → kolejna iteracja
 ```
 
 Najważniejsze szczegóły:
 
 - **Porządkowanie klatek** — MediaPipe wymaga monotonicznie rosnących znaczników czasu. `CameraApp.read()` znakuje każdą klatkę wartością `time.time_ns()`; `recognize_frame()` (`src/recognizer.py:140`) odrzuca klatki, których znacznik nie jest nowszy od ostatnio przetworzonego, po czym konwertuje nanosekundy na milisekundy dla `recognize_async`.
 - **Bezpieczne wątkowo aktualizacje UI** — `handle_result` działa w wątku MediaPipe, więc tworzy odłączony od tablicy źródłowej `QImage` i nie używa widżetów ani `QPixmap`. Następnie emituje `result_ready_signal` (`Signal(object, list, list, int)`); Qt kolejkuje połączenie do wątku głównego, gdzie `MainApp.process_result_and_frame` konwertuje obraz do `QPixmap` i aktualizuje interfejs.
-- **Pomiar FPS** — obliczany co 5 przetworzonych klatek jako `5 / Δt` (`calculate_fps`, `src/recognizer.py:129`).
+- **Odzyskiwanie i backpressure** — jednocześnie może oczekiwać tylko jedno `recognize_async()`. Callback kolejkuje następny odczyt w wątku Qt, a nieudany odczyt lub wysłanie jest ponawiane po 50 ms bez blokowania GUI.
+- **Pomiar FPS** — obliczany po każdym pełnym oknie 5 klatek jako `5 / Δt` (`calculate_fps`, `src/recognizer.py`).
 - **Współbieżność TTS** — `SpeakerApp.speak` uruchamia zaakceptowaną wypowiedź w wątku demona `threading.Thread`. Blokada zapobiega równoczesnym wywołaniom `pyttsx3.runAndWait()`; żądania z kolejnych klatek odebrane w trakcie trwającej wypowiedzi są ignorowane, a nie kolejkowane (`src/speaker.py`).
 - **Zamykanie** — `MainApp.closeEvent` odłącza sygnał, zamyka rozpoznawanie, zwalnia kamerę i zatrzymuje silnik TTS — w tej kolejności.
 
@@ -131,7 +133,7 @@ Tworzy `QApplication`, konfiguruje `logging` (poziom INFO, UTF-8), nakłada arku
 |---|---|
 | `start()` | Jednorazowa inicjalizacja: budowa słownika backendów kamery, utworzenie kamery / TTS / rozpoznawania, jeśli nie istnieją |
 | `init_camera()` / `reset_camera()` | Tworzy lub ponownie otwiera `CameraApp` z urządzeniem, backendem i rozdzielczością wybranymi w GUI |
-| `reset_recognizer()` | Zamyka i buduje od nowa `GestureRecognizerApp` z bieżącymi progami i ścieżką modelu, ponownie podłącza `result_ready_signal`, restartuje pętlę |
+| `reset_recognizer()` | Buduje kandydata z bieżącymi progami i modelem, a podmienia go dopiero po poprawnym załadowaniu; przy błędzie poprzedni recognizer pozostaje aktywny |
 | `reset_tts()` | Buduje od nowa `SpeakerApp` z wybranym tempem i głośnością |
 | `open_file_dialog()` | Pozwala wybrać plik modelu `.task`; wyzwala `reset_recognizer()` |
 | `populate_cameras()` / `populate_camera_drivers()` | Enumeruje urządzenia wideo (`QMediaDevices.videoInputs()`) i backendy OpenCV (`cv2.videoio_registry.getCameraBackends()`) |
@@ -161,7 +163,7 @@ Hermetyzuje API MediaPipe Tasks:
   - progami detekcji dłoni przekazanymi z GUI,
   - `custom_gesture_classifier_options = ClassifierOptions(max_results=1, score_threshold=…)` — zwracany jest tylko jeden najlepszy gest powyżej progu użytkownika.
 - `recognize_frame()` pobiera świeżą klatkę z `CameraApp`, pomija nieaktualne znaczniki czasu, opakowuje tablicę w `mediapipe.Image(SRGB)` i wywołuje `recognize_async`.
-- `handle_result()` nanosi adnotacje na klatkę, oblicza FPS, emituje `result_ready_signal` i — dopóki rozpoznawanie istnieje — planuje kolejne `recognize_frame()`, domykając pętlę.
+- `handle_result()` nanosi adnotacje, oblicza FPS, emituje `result_ready_signal` i zawsze emituje kolejkowany `recognize_next_signal`, dopóki recognizer jest aktywny, również po obsługiwalnym błędzie callbacku.
 - `process_recognition_result()` konwertuje punkty charakterystyczne pierwszej wykrytej dłoni do protobufa `NormalizedLandmarkList` i rysuje je funkcją `mp.solutions.drawing_utils.draw_landmarks`, korzystając z niestandardowych stylów z `custom_landmarks.py`. Z wyniku wyodrębnia nazwy i wyniki `[gest, ręczność]`.
 - `create_scaled_qimage()` kopiuje klatkę NumPy z adnotacjami do odłączonego `QImage`, skalując do 640×480 (z zachowaniem proporcji, szybka transformacja) tylko wtedy, gdy rozdzielczość źródłowa jest inna.
 
@@ -216,17 +218,17 @@ Częścią trenowaną jest w pełni połączona głowica klasyfikacyjna nad zamr
 
 ### 5.3 Ewaluacja i eksport
 
-Po treningu model jest oceniany na wydzielonym zbiorze testowym (`model.evaluate`, batch 16). Output zachowany w notatniku podaje **stratę testową 0,0228** i **dokładność testową 98,18%** dla udokumentowanego przebiegu. Przebiegi z poszczególnych epok zebrane podczas eksperymentów znajdują się w pliku [`docs/epoch_data.ods`](epoch_data.ods). Model eksportowany jest poleceniem `model.export_model()` do pakietu TensorFlow Lite **`.task`** (detektor dłoni + model punktów charakterystycznych + własny klasyfikator), a etykiety poleceniem `model.export_labels`.
+Po treningu model jest oceniany na wydzielonym zbiorze testowym (`model.evaluate`, batch 16). Output zachowany w notatniku podaje **stratę testową 0,0228** i **dokładność testową 98,18%** dla przebiegu wyeksportowanego jako domyślny `gesture_recognizer_asl_0.task`. Przebiegi z poszczególnych epok zebrane podczas eksperymentów znajdują się w pliku [`docs/epoch_data.ods`](epoch_data.ods). Model eksportowany jest poleceniem `model.export_model()` do pakietu TensorFlow Lite **`.task`** (detektor dłoni + model punktów charakterystycznych + własny klasyfikator), a etykiety poleceniem `model.export_labels`.
 
 ### 5.4 Modele dołączone do repozytorium
 
-| Plik | Opis |
-|---|---|
-| `models/gesture_recognizer_asl_0.task` | Model domyślny ładowany przy starcie |
-| `models/gesture_recognizer_asl_1.task` | Alternatywny przebieg treningu |
-| `models/gesture_recognizer_asl_mp.task` | Wariant oparty na standardowej konfiguracji MediaPipe |
+| Plik | Pochodzenie i ewaluacja na zbiorze testowym | SHA-256 |
+|---|---|---|
+| `models/gesture_recognizer_asl_0.task` | Finalny eksport z notebooka; strata 0,0228059, dokładność 98,1768%; model domyślny | `44717cea7089e350dc4fc13a1138c262769a5feccf046d3ff223c427b981fa54` |
+| `models/gesture_recognizer_asl_1.task` | Historyczny przebieg ASL v13; strata 0,0295949, dokładność 98,1467% | `d57b4fc4cc84739dc75ebf4ef919d08559b3cfb967fc8e481c4b0f2403ac0688` |
+| `models/gesture_recognizer_asl_mp.task` | Standardowe hiperparametry MediaPipe Model Maker; strata 0,2174392, dokładność 90,9563% | `64a495eb304e01683d8a54ade9f9a63ff07628641556512e2cccc566b6fd68b1` |
 
-Każdy z nich (lub nowo wytrenowany) można wczytać w trakcie działania aplikacji przyciskiem **Model**.
+Metryki v13 i standardowego wariantu zachowano w historii usuniętego podczas porządkowania pliku `models/info.txt`. Bieżące artefakty przypięto w [`models/SHA256SUMS.txt`](../models/SHA256SUMS.txt), a CI weryfikuje ich zawartość. Każdy dołączony lub nowo wytrenowany model można wczytać przyciskiem **Model**.
 
 ## 6. Parametry konfiguracyjne
 

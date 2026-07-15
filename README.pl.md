@@ -7,7 +7,7 @@
 
 [![Licencja kodu](https://img.shields.io/badge/Licencja%20kodu-GPL%20v3.0-blue.svg)](LICENSE)
 [![Licencja dokumentacji](https://img.shields.io/badge/Licencja%20dokumentacji-CC%20BY--NC--ND%204.0-lightgrey.svg)](LICENSE-docs)
-![Python](https://img.shields.io/badge/Python-3.9%E2%80%933.12-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.12-blue.svg)
 ![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14%E2%80%93%3C0.10.30-orange.svg)
 ![PySide6](https://img.shields.io/badge/PySide6-%E2%89%A56.7.3-41cd52.svg)
 ![Platform](https://img.shields.io/badge/Platforma-Windows%20%7C%20Linux-lightgrey.svg)
@@ -55,7 +55,7 @@ flowchart LR
 ```
 
 1. **Przechwytywanie** — `CameraApp` pobiera klatki BGR z wybranej kamery i konwertuje je do RGB wraz ze znacznikiem czasu w nanosekundach.
-2. **Rozpoznawanie** — `GestureRecognizerApp` przekazuje każdą klatkę asynchronicznie do MediaPipe Gesture Recognizer; wywołanie zwrotne z wynikiem inicjuje pobranie kolejnej klatki, tworząc samopodtrzymującą się pętlę przetwarzania.
+2. **Rozpoznawanie** — `GestureRecognizerApp` przekazuje do MediaPipe po jednej klatce. Callback kolejkuje następne przechwycenie w wątku Qt, a krótki timer ponawia chwilowo nieudany odczyt lub wysłanie klatki.
 3. **Przetwarzanie końcowe** — `MainApp` opcjonalnie agreguje ostatnie *N* klasyfikacji, wybierając najczęstszy znak i jego średni wynik.
 4. **Wyjście** — klatka z naniesionym szkieletem dłoni, rozpoznana litera, pewność i FPS są wyświetlane w GUI; litera może być dodatkowo syntezowana do mowy.
 
@@ -87,7 +87,8 @@ AI_sign_language_translator/
 ├── models/                     # Wytrenowane modele MediaPipe (.task)
 │   ├── gesture_recognizer_asl_0.task     # Model domyślny
 │   ├── gesture_recognizer_asl_1.task
-│   └── gesture_recognizer_asl_mp.task
+│   ├── gesture_recognizer_asl_mp.task
+│   └── SHA256SUMS.txt                     # Przypięte sumy modeli
 ├── notebooks/                  # Trening modelu (Google Colab)
 │   ├── Custom_gesture_recognizer.ipynb
 │   └── custom_gesture_recognizer.py
@@ -106,7 +107,7 @@ AI_sign_language_translator/
 
 | Składnik | Wymaganie |
 |---|---|
-| Python | 3.9 – 3.12 (64-bit), zgodnie ze wsparciem MediaPipe |
+| Python | 3.10 lub 3.12 (64-bit; wersje testowane w CI) |
 | System | Windows 10/11 (platforma docelowa) lub Linux |
 | Sprzęt | Kamera internetowa; wystarczy współczesny procesor wielordzeniowy (GPU nie jest wymagane) |
 | Kluczowe pakiety | `mediapipe ≥ 0.10.14, < 0.10.30`, poprawiony `protobuf 4.25.9`, `PySide6 ≥ 6.7.3`, `qdarkstyle ≥ 3.2.3`, `pyttsx3 ≥ 2.98` |
@@ -165,7 +166,7 @@ Aplikację można też uruchomić bez instalowania Pythona ani zależności, wpr
 gotowego wydania opublikowanego na
 [stronie Releases](https://github.com/Kamilr616/AI_sign_language_translator/releases):
 
-- **Pojedynczy plik EXE** — pobierz `AI-Sign-Language-Translator.exe` i kliknij go
+- **Pojedynczy plik EXE** — pobierz wersjonowany plik `...-windows-x64.exe` i kliknij go
   dwukrotnie. Wszystko (środowisko Pythona, Qt, MediaPipe oraz dołączone modele)
   jest spakowane w tym jednym pliku; nie trzeba nic instalować ani rozpakowywać.
   Pierwsze uruchomienie jest nieco wolniejsze, bo plik rozpakowuje się do katalogu
@@ -193,7 +194,7 @@ Po przygotowaniu środowiska deweloperskiego z Pythonem 3.10 i instalacji zależ
 ```
 
 Skrypt uruchamia testy i buduje aplikację przez PyInstaller w dwóch postaciach
-w katalogu `dist/release/`: **pojedynczy plik** `AI-Sign-Language-Translator.exe`
+w katalogu `dist/release/`: wersjonowany **pojedynczy plik** `...-windows-x64.exe`
 oraz gotową do rozpakowania **wersję katalogową** spakowaną jako archiwum ZIP dla
 Windows x64.
 

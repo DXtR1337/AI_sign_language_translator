@@ -35,7 +35,7 @@ The recognizable classes are the **24 static letters of the ASL alphabet** (A–
 
 | Layer | Technology | Role |
 |---|---|---|
-| Language | Python 3.9–3.12 | Application logic |
+| Language | Python 3.10 or 3.12 | Application logic |
 | ML inference | [MediaPipe Tasks](https://ai.google.dev/edge/mediapipe) ≥ 0.10.14, < 0.10.30 (`GestureRecognizer`) | Hand detection, tracking and gesture classification (TFLite) |
 | Serialization | Locally patched protobuf 4.25.9 | MediaPipe messages; parser-fix backport, using the UPB wheel on Windows x64/Python 3.10+ and a pure-Python fallback elsewhere |
 | ML training | MediaPipe Model Maker, TensorFlow 2 (Google Colab) | Training of the custom classification head |
@@ -78,7 +78,7 @@ flowchart TB
 
 ### 3.2 Recognition loop and threading model
 
-MediaPipe's `GestureRecognizer` runs in **`RunningMode.LIVE_STREAM`**, which means `recognize_async()` returns immediately and the result is delivered later on a MediaPipe worker thread via the `result_callback`. The application exploits this to build a **self-sustaining asynchronous loop** without an explicit capture thread or timer:
+MediaPipe's `GestureRecognizer` runs in **`RunningMode.LIVE_STREAM`**, which means `recognize_async()` returns immediately and the result is delivered later on a MediaPipe worker thread via the `result_callback`. The application builds a resilient asynchronous loop around a queued Qt signal. A short `QTimer` retry is used only after a transient capture or submission failure:
 
 ```mermaid
 sequenceDiagram
@@ -97,14 +97,16 @@ sequenceDiagram
     R--)M: result_ready_signal.emit(image, text, scores, fps)
     Note over M: sliding-window voting,<br/>update labels & progress bars
     M--)T: speak(letter)  [if enabled]
-    R->>R: recognize_frame()  → next iteration
+    R--)M: recognize_next_signal (queued)
+    M->>R: recognize_frame()  → next iteration
 ```
 
 Key details:
 
 - **Frame ordering** — MediaPipe requires monotonically increasing timestamps. `CameraApp.read()` stamps each frame with `time.time_ns()`; `recognize_frame()` (`src/recognizer.py:140`) discards frames whose timestamp is not newer than the last one processed, then converts nanoseconds to milliseconds for `recognize_async`.
 - **Thread-safe UI updates** — `handle_result` runs on a MediaPipe thread, so it creates a detached `QImage` and never touches widgets or `QPixmap`. It emits `result_ready_signal` (a `Signal(object, list, list, int)`); Qt queues the connection to the main thread, where `MainApp.process_result_and_frame` converts the image to `QPixmap` and updates the UI.
-- **FPS measurement** — computed every 5 processed frames as `5 / Δt` (`calculate_fps`, `src/recognizer.py:129`).
+- **Recovery and backpressure** — only one `recognize_async()` call may be pending. Callback completion queues the next capture on the Qt thread; failed reads or submissions retry after 50 ms without blocking the GUI.
+- **FPS measurement** — computed after each complete 5-frame sample window as `5 / Δt` (`calculate_fps`, `src/recognizer.py`).
 - **TTS concurrency** — `SpeakerApp.speak` runs an accepted utterance on a daemon `threading.Thread`. A lock prevents multiple calls to `pyttsx3.runAndWait()` at once; frame-level requests received while speech is already in progress are ignored rather than queued (`src/speaker.py`).
 - **Shutdown** — `MainApp.closeEvent` disconnects the signal, closes the recognizer, releases the camera and stops the TTS engine, in that order.
 
@@ -131,7 +133,7 @@ Creates the `QApplication`, configures `logging` (INFO level, UTF-8), applies th
 |---|---|
 | `start()` | One-time initialization: builds the camera-driver dictionary, creates camera / TTS / recognizer if absent |
 | `init_camera()` / `reset_camera()` | Creates or re-opens `CameraApp` with the device, backend and resolution chosen in the GUI |
-| `reset_recognizer()` | Tears down and rebuilds `GestureRecognizerApp` with the current thresholds and model path, reconnects `result_ready_signal`, restarts the loop |
+| `reset_recognizer()` | Builds a candidate with the current thresholds and model, then swaps it in only after successful loading; the previous recognizer remains active on failure |
 | `reset_tts()` | Rebuilds `SpeakerApp` with the selected rate and volume |
 | `open_file_dialog()` | Lets the user pick a `.task` model file; triggers `reset_recognizer()` |
 | `populate_cameras()` / `populate_camera_drivers()` | Enumerates video devices (`QMediaDevices.videoInputs()`) and OpenCV capture backends (`cv2.videoio_registry.getCameraBackends()`) |
@@ -161,7 +163,7 @@ Encapsulates the MediaPipe Tasks API:
   - hand-detection thresholds passed from the GUI,
   - `custom_gesture_classifier_options = ClassifierOptions(max_results=1, score_threshold=…)` — only the single best gesture above the user threshold is returned.
 - `recognize_frame()` pulls a fresh frame from `CameraApp`, skips stale timestamps, wraps the array in `mediapipe.Image(SRGB)` and calls `recognize_async`.
-- `handle_result()` annotates the frame, computes FPS, emits `result_ready_signal` and — as long as the recognizer exists — schedules the next `recognize_frame()`, closing the loop.
+- `handle_result()` annotates the frame, computes FPS, emits `result_ready_signal` and always emits the queued `recognize_next_signal` while the recognizer remains active, including after a recoverable callback error.
 - `process_recognition_result()` converts the landmarks of the first detected hand into a `NormalizedLandmarkList` protobuf and draws them with `mp.solutions.drawing_utils.draw_landmarks`, using the custom styles from `custom_landmarks.py`. It extracts `[gesture, handedness]` names and scores from the result.
 - `create_scaled_qimage()` copies the annotated NumPy frame into a detached `QImage`, downscaling to 640×480 (aspect-ratio preserving, fast transformation) only when the source resolution differs.
 
@@ -216,17 +218,17 @@ The trainable part is a fully-connected classification head on top of the frozen
 
 ### 5.3 Evaluation and export
 
-After training, the model is evaluated on the held-out test split (`model.evaluate`, batch 16). The output preserved in the notebook reports **test loss 0.0228** and **test accuracy 98.18%** for the documented run. Per-epoch curves gathered during the experiments are stored in [`docs/epoch_data.ods`](epoch_data.ods). The model is exported with `model.export_model()` to a TensorFlow Lite **`.task` bundle** (hand detector + hand landmarker + custom classifier) and the labels with `model.export_labels`.
+After training, the model is evaluated on the held-out test split (`model.evaluate`, batch 16). The output preserved in the notebook reports **test loss 0.0228** and **test accuracy 98.18%** for the run exported as the default `gesture_recognizer_asl_0.task`. Per-epoch curves gathered during the experiments are stored in [`docs/epoch_data.ods`](epoch_data.ods). The model is exported with `model.export_model()` to a TensorFlow Lite **`.task` bundle** (hand detector + hand landmarker + custom classifier) and the labels with `model.export_labels`.
 
 ### 5.4 Shipped models
 
-| File | Description |
-|---|---|
-| `models/gesture_recognizer_asl_0.task` | Default model loaded on startup |
-| `models/gesture_recognizer_asl_1.task` | Alternative training run |
-| `models/gesture_recognizer_asl_mp.task` | Variant based on the stock MediaPipe configuration |
+| File | Provenance and held-out evaluation | SHA-256 |
+|---|---|---|
+| `models/gesture_recognizer_asl_0.task` | Final notebook export; loss 0.0228059, accuracy 98.1768%; default at startup | `44717cea7089e350dc4fc13a1138c262769a5feccf046d3ff223c427b981fa54` |
+| `models/gesture_recognizer_asl_1.task` | Historical ASL v13 run; loss 0.0295949, accuracy 98.1467% | `d57b4fc4cc84739dc75ebf4ef919d08559b3cfb967fc8e481c4b0f2403ac0688` |
+| `models/gesture_recognizer_asl_mp.task` | Stock MediaPipe Model Maker hyperparameters; loss 0.2174392, accuracy 90.9563% | `64a495eb304e01683d8a54ade9f9a63ff07628641556512e2cccc566b6fd68b1` |
 
-Any of them (or a newly trained one) can be loaded at runtime via the **Model** button.
+The v13 and stock-run metrics are preserved in the pre-cleanup `models/info.txt` history. The current artifacts are pinned in [`models/SHA256SUMS.txt`](../models/SHA256SUMS.txt), and CI verifies their bytes. Any shipped or newly trained model can be loaded at runtime via the **Model** button.
 
 ## 6. Configuration parameters
 
