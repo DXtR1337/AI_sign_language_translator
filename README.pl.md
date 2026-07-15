@@ -5,9 +5,10 @@
 🇬🇧 **English version:** [README.md](README.md)
 📚 **Dokumentacja techniczna:** [docs/TECHNICAL_DOCUMENTATION.pl.md](docs/TECHNICAL_DOCUMENTATION.pl.md) · [English version](docs/TECHNICAL_DOCUMENTATION.md)
 
-![License: MIT](https://img.shields.io/badge/Licencja-MIT-green.svg)
+[![Licencja kodu](https://img.shields.io/badge/Licencja%20kodu-GPL%20v3.0-blue.svg)](LICENSE)
+[![Licencja dokumentacji](https://img.shields.io/badge/Licencja%20dokumentacji-CC%20BY--NC--ND%204.0-lightgrey.svg)](LICENSE-docs)
 ![Python](https://img.shields.io/badge/Python-3.9%E2%80%933.12-blue.svg)
-![MediaPipe](https://img.shields.io/badge/MediaPipe-%E2%89%A50.10.14-orange.svg)
+![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14%E2%80%93%3C0.10.30-orange.svg)
 ![PySide6](https://img.shields.io/badge/PySide6-%E2%89%A56.7.3-41cd52.svg)
 ![Platform](https://img.shields.io/badge/Platforma-Windows%20%7C%20Linux-lightgrey.svg)
 
@@ -22,7 +23,12 @@ System powstał jako część pracy inżynierskiej
 
 Potok rozpoznawania oparty jest na **MediaPipe Gesture Recognizer** z **własnym, wytrenowanym modelem klasyfikacyjnym**, a interfejs graficzny wykorzystuje **Qt for Python (PySide6)** z ciemnym motywem.
 
-![Interfejs aplikacji](docs/images/ui.PNG)
+## Zrzuty ekranu
+
+<p align="center">
+  <img src="docs/images/ui.PNG" width="49%" alt="Rozpoznawanie litery V alfabetu ASL">
+  <img src="docs/images/ui_mat.PNG" width="49%" alt="Rozpoznawanie litery I alfabetu ASL">
+</p>
 
 ## Najważniejsze funkcje
 
@@ -69,8 +75,15 @@ AI_sign_language_translator/
 │   ├── gui.py                  # Klasa UI skompilowana z gui.ui (pyside6-uic)
 │   ├── gui.ui                  # Definicja interfejsu (Qt Designer)
 │   ├── assets/                 # Ikony i loga
-│   ├── requirements.txt        # Zależności Pythona
-│   └── setup.sh                # Skrypt instalacji zależności
+│   └── requirements.txt        # Zależności Pythona
+├── scripts/                    # Skrypty konfiguracji środowiska i uruchamiania
+│   ├── build_patched_protobuf.ps1  # Odtwarzalna budowa wheel zgodności
+│   ├── build_windows_release.ps1   # Testowana budowa wydania Windows x64
+│   ├── repack_patched_wheel.py     # Deterministyczne pakowanie wheel Windows
+│   ├── run_venv.bat            # Uruchamianie na Windows (cmd)
+│   ├── run_venv.ps1            # Uruchamianie na Windows (PowerShell)
+│   └── setup.sh                # Instalacja zależności w systemach POSIX
+├── third_party/                # Patch protobuf, licencja i zweryfikowane wheel
 ├── models/                     # Wytrenowane modele MediaPipe (.task)
 │   ├── gesture_recognizer_asl_0.task     # Model domyślny
 │   ├── gesture_recognizer_asl_1.task
@@ -78,10 +91,14 @@ AI_sign_language_translator/
 ├── notebooks/                  # Trening modelu (Google Colab)
 │   ├── Custom_gesture_recognizer.ipynb
 │   └── custom_gesture_recognizer.py
+├── tests/                      # Testy regresji i ładowania modeli
+├── .github/workflows/          # CI Windows dla Pythona 3.10 i 3.12
 ├── docs/                       # Dokumentacja, pliki pracy dyplomowej, zrzuty ekranu
-├── run_venv.bat                # Uruchamianie na Windows (cmd)
-├── run_venv.ps1                # Uruchamianie na Windows (PowerShell)
-├── LICENSE                     # Licencja MIT
+├── requirements-dev.txt        # Zależności testów i pakowania
+├── AGENTS.md                   # Zasady utrzymania repozytorium
+├── SECURITY.md                 # Zasady prywatnego zgłaszania podatności
+├── LICENSE                     # Licencja GNU GPL v3.0 dla kodu
+├── LICENSE-docs                # Licencja CC BY-NC-ND dla pracy i dokumentacji
 └── README.md
 ```
 
@@ -92,9 +109,16 @@ AI_sign_language_translator/
 | Python | 3.9 – 3.12 (64-bit), zgodnie ze wsparciem MediaPipe |
 | System | Windows 10/11 (platforma docelowa) lub Linux |
 | Sprzęt | Kamera internetowa; wystarczy współczesny procesor wielordzeniowy (GPU nie jest wymagane) |
-| Kluczowe pakiety | `mediapipe ≥ 0.10.14`, `PySide6 ≥ 6.7.3`, `qdarkstyle ≥ 3.2.3`, `pyttsx3 ≥ 2.98` |
+| Kluczowe pakiety | `mediapipe ≥ 0.10.14, < 0.10.30`, poprawiony `protobuf 4.25.9`, `PySide6 ≥ 6.7.3`, `qdarkstyle ≥ 3.2.3`, `pyttsx3 ≥ 2.98` |
 
 > OpenCV i NumPy są instalowane automatycznie jako zależności MediaPipe.
+> MediaPipe od wersji 0.10.30 nie zawiera starszych helperów rysowania używanych przez niestandardowe style punktów dłoni w tej aplikacji.
+
+Ograniczenie wersji protobuf narzucone przez MediaPipe wyklucza nowsze wydanie
+upstream zawierające poprawkę CVE-2026-0994. Repozytorium dostarcza więc
+sprawdzony backport jako zoptymalizowany wheel dla Windows x64 oraz przenośny
+fallback. Źródło, dokładny patch, sumy kontrolne i odtwarzalna procedura budowy
+są opisane w [`third_party/protobuf/README.md`](third_party/protobuf/README.md).
 
 ## Instalacja
 
@@ -119,22 +143,59 @@ python -m pip install -r src/requirements.txt
 
 ## Uruchamianie
 
-Aplikację należy uruchamiać z katalogu `src/` (ścieżka domyślnego modelu jest rozwiązywana względem niego):
+Z katalogu głównego repozytorium uruchom:
 
 ```bash
-cd src
-python main.py
+python src/main.py
 ```
 
 W systemie Windows, przy środowisku wirtualnym utworzonym w katalogu `venv/` jak powyżej, można skorzystać z gotowych skryptów w katalogu głównym repozytorium:
 
 ```powershell
-.\run_venv.ps1     # PowerShell
+.\scripts\run_venv.ps1     # PowerShell
 ```
 
 ```bat
-run_venv.bat       :: cmd
+scripts\run_venv.bat       :: cmd
 ```
+
+### Gotowy plik wykonywalny dla Windows (bez instalacji Pythona)
+
+Aplikację można też uruchomić bez instalowania Pythona ani zależności, wprost z
+gotowego wydania opublikowanego na
+[stronie Releases](https://github.com/Kamilr616/AI_sign_language_translator/releases):
+
+- **Pojedynczy plik EXE** — pobierz `AI-Sign-Language-Translator.exe` i kliknij go
+  dwukrotnie. Wszystko (środowisko Pythona, Qt, MediaPipe oraz dołączone modele)
+  jest spakowane w tym jednym pliku; nie trzeba nic instalować ani rozpakowywać.
+  Pierwsze uruchomienie jest nieco wolniejsze, bo plik rozpakowuje się do katalogu
+  tymczasowego.
+- **Wersja katalogowa (ZIP)** — pobierz archiwum `...-windows-x64.zip`, rozpakuj
+  je w dowolnym miejscu i uruchom `RUN.bat` (lub `app\AI-Sign-Language-Translator.exe`).
+  Tutaj środowisko i modele leżą obok pliku wykonywalnego w folderze `app`;
+  uruchamianie jest szybsze niż w wersji jednoplikowej.
+
+Rozpoznawanie na żywo wymaga kamery.
+
+## Testy
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
+## Budowanie wydania Windows
+
+Po przygotowaniu środowiska deweloperskiego z Pythonem 3.10 i instalacji zależności:
+
+```powershell
+.\scripts\build_windows_release.ps1 -Version 1.1.0
+```
+
+Skrypt uruchamia testy i buduje aplikację przez PyInstaller w dwóch postaciach
+w katalogu `dist/release/`: **pojedynczy plik** `AI-Sign-Language-Translator.exe`
+oraz gotową do rozpakowania **wersję katalogową** spakowaną jako archiwum ZIP dla
+Windows x64.
 
 ## Obsługa
 
@@ -157,6 +218,8 @@ Model klasyfikacyjny został wytrenowany przy użyciu **MediaPipe Model Maker** 
 - **Hiperparametry:** 70 epok, batch 16, learning rate 0.001 ze współczynnikiem zaniku 0.95, dropout 0.075, focal loss γ = 2.
 - **Eksport:** pakiet TensorFlow Lite (`.task`) wykorzystywany bezpośrednio przez aplikację.
 
+Zachowany output udokumentowanego treningu podaje **98,18% dokładności testowej** i **0,0228 straty testowej** na wydzielonym 2-procentowym zbiorze testowym. Wyniki opisują ten konkretny przebieg i nie gwarantują takiej samej jakości dla innych kamer, warunków oświetlenia ani użytkowników.
+
 Szczegóły, w tym podział zbioru danych i procedura ewaluacji, opisane są w [dokumentacji technicznej](docs/TECHNICAL_DOCUMENTATION.pl.md#5-potok-treningu-modelu).
 
 ## Dokumentacja
@@ -165,11 +228,17 @@ Szczegóły, w tym podział zbioru danych i procedura ewaluacji, opisane są w [
 |---|---|
 | [Dokumentacja techniczna (PL)](docs/TECHNICAL_DOCUMENTATION.pl.md) | Architektura, moduły, przepływ danych, potok treningowy |
 | [Technical documentation (EN)](docs/TECHNICAL_DOCUMENTATION.md) | Wersja angielska dokumentacji technicznej |
-| [Praca inżynierska (PL)](docs/System%20rozpoznawania%20oraz%20t%C5%82umaczenia%20alfabetu%20migowego%20z%20wykorzystaniem%20sztucznej%20inteligencji.pdf) | Pełny tekst pracy dyplomowej |
+| [Praca inżynierska (PL)](docs/Praca_Dyplomowa_Kamil_Rataj.pdf) | Pełny, 65-stronicowy tekst pracy dyplomowej |
+
+## Współpraca i bezpieczeństwo
+
+Zgłoszenia błędów i niewielkie pull requesty są mile widziane. Podatności bezpieczeństwa należy zgłaszać prywatnie zgodnie z [SECURITY.md](SECURITY.md), a nie w publicznym issue. Lokalna poprawka zależności protobuf i jej mechanizmy weryfikacji są opisane w katalogu [`third_party/protobuf`](third_party/protobuf/README.md).
 
 ## Licencja
 
-Projekt udostępniany jest na licencji **MIT** — zob. [LICENSE](LICENSE).
+**Kod źródłowy** jest udostępniany na [licencji GNU General Public License v3.0](LICENSE). Możesz go swobodnie używać, analizować, udostępniać i modyfikować, także komercyjnie, pod warunkiem że utwory pochodne również będą rozpowszechniane na licencji GPL oraz zachowają kod źródłowy i noty licencyjne. Aplikacja dołącza Qt for Python (PySide6) na licencji GNU GPL, a także komponenty na licencjach Apache-2.0, MIT, BSD i MPL-2.0 — wszystkie zgodne z GPLv3.
+
+Praca inżynierska oraz oryginalna dokumentacja, diagramy i zrzuty są udostępniane na [licencji CC BY-NC-ND 4.0](LICENSE-docs). Loga i znaki podmiotów trzecich pozostają własnością ich właścicieli.
 
 ## Autor
 

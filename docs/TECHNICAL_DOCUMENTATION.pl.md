@@ -36,7 +36,8 @@ Rozpoznawane klasy to **24 statyczne litery alfabetu ASL** (A–Y, z pominięcie
 | Warstwa | Technologia | Rola |
 |---|---|---|
 | Język | Python 3.9–3.12 | Logika aplikacji |
-| Inferencja ML | [MediaPipe Tasks](https://ai.google.dev/edge/mediapipe) ≥ 0.10.14 (`GestureRecognizer`) | Detekcja i śledzenie dłoni oraz klasyfikacja gestów (TFLite) |
+| Inferencja ML | [MediaPipe Tasks](https://ai.google.dev/edge/mediapipe) ≥ 0.10.14, < 0.10.30 (`GestureRecognizer`) | Detekcja i śledzenie dłoni oraz klasyfikacja gestów (TFLite) |
+| Serializacja | Lokalnie poprawiony protobuf 4.25.9 | Komunikaty MediaPipe; backport poprawki parsera, wheel UPB dla Windows x64/Python 3.10+ i fallback pure-Python w pozostałych środowiskach |
 | Trening ML | MediaPipe Model Maker, TensorFlow 2 (Google Colab) | Trening własnej głowicy klasyfikacyjnej |
 | Wideo I/O | OpenCV (`cv2.VideoCapture`, instalowany jako zależność MediaPipe) | Przechwytywanie obrazu i zarządzanie backendami |
 | GUI | PySide6 ≥ 6.7.3 (Qt for Python), QDarkStyle ≥ 3.2.3 | Okno główne, podgląd wideo, panele ustawień, ciemny motyw |
@@ -69,7 +70,7 @@ flowchart TB
     APP -->|tworzy / konfiguruje| CAM
     APP -->|tworzy / konfiguruje| REC
     APP -->|tworzy / konfiguruje| TTS
-    REC -->|"result_ready_signal (QPixmap, tekst, wyniki, fps)"| APP
+    REC -->|"result_ready_signal (QImage, tekst, wyniki, fps)"| APP
     APP -->|"speak(litera)"| TTS
 ```
 
@@ -93,7 +94,7 @@ sequenceDiagram
     R->>MP: recognize_async(mp.Image, ts_ms)
     MP-->>R: handle_result(wynik, obraz, ts)
     Note over R: rysowanie szkieletu, obliczenie FPS
-    R--)M: result_ready_signal.emit(pixmap, tekst, wyniki, fps)
+    R--)M: result_ready_signal.emit(obraz, tekst, wyniki, fps)
     Note over M: głosowanie w oknie przesuwnym,<br/>aktualizacja etykiet i pasków
     M--)T: speak(litera)  [jeśli włączone]
     R->>R: recognize_frame()  → kolejna iteracja
@@ -101,10 +102,10 @@ sequenceDiagram
 
 Najważniejsze szczegóły:
 
-- **Porządkowanie klatek** — MediaPipe wymaga monotonicznie rosnących znaczników czasu. `CameraApp.read()` znakuje każdą klatkę wartością `time.time_ns()`; `recognize_frame()` (`src/recognizer.py:137`) odrzuca klatki, których znacznik nie jest nowszy od ostatnio przetworzonego, po czym konwertuje nanosekundy na milisekundy dla `recognize_async`.
-- **Bezpieczne wątkowo aktualizacje UI** — `handle_result` działa w wątku MediaPipe, więc nigdy nie modyfikuje widżetów bezpośrednio. Zamiast tego emituje `result_ready_signal` (`Signal(object, list, list, int)`); Qt automatycznie kolejkuje połączenie do wątku głównego, gdzie `MainApp.process_result_and_frame` aktualizuje interfejs.
-- **Pomiar FPS** — obliczany co 5 przetworzonych klatek jako `5 / Δt` (`calculate_fps`, `src/recognizer.py:126`).
-- **Współbieżność TTS** — `SpeakerApp.speak` uruchamia każdą wypowiedź w nowym wątku `threading.Thread`, chronionym blokadą i zdarzeniem zatrzymania, dzięki czemu nowa litera może przerwać poprzednią wypowiedź (`src/speaker.py`).
+- **Porządkowanie klatek** — MediaPipe wymaga monotonicznie rosnących znaczników czasu. `CameraApp.read()` znakuje każdą klatkę wartością `time.time_ns()`; `recognize_frame()` (`src/recognizer.py:140`) odrzuca klatki, których znacznik nie jest nowszy od ostatnio przetworzonego, po czym konwertuje nanosekundy na milisekundy dla `recognize_async`.
+- **Bezpieczne wątkowo aktualizacje UI** — `handle_result` działa w wątku MediaPipe, więc tworzy odłączony od tablicy źródłowej `QImage` i nie używa widżetów ani `QPixmap`. Następnie emituje `result_ready_signal` (`Signal(object, list, list, int)`); Qt kolejkuje połączenie do wątku głównego, gdzie `MainApp.process_result_and_frame` konwertuje obraz do `QPixmap` i aktualizuje interfejs.
+- **Pomiar FPS** — obliczany co 5 przetworzonych klatek jako `5 / Δt` (`calculate_fps`, `src/recognizer.py:129`).
+- **Współbieżność TTS** — `SpeakerApp.speak` uruchamia zaakceptowaną wypowiedź w wątku demona `threading.Thread`. Blokada zapobiega równoczesnym wywołaniom `pyttsx3.runAndWait()`; żądania z kolejnych klatek odebrane w trakcie trwającej wypowiedzi są ignorowane, a nie kolejkowane (`src/speaker.py`).
 - **Zamykanie** — `MainApp.closeEvent` odłącza sygnał, zamyka rozpoznawanie, zwalnia kamerę i zatrzymuje silnik TTS — w tej kolejności.
 
 ### 3.3 Przetwarzanie końcowe wyników (wygładzanie)
@@ -112,7 +113,7 @@ Najważniejsze szczegóły:
 Surowe klasyfikacje pojedynczych klatek są niestabilne. Po włączeniu pola *Average sign* `MainApp` utrzymuje **okno przesuwne** (`last_results`) ostatnich par `(znak, wynik)`, ograniczone wartością suwaka w GUI:
 
 1. `calculate_results_length` usuwa najstarszy wpis, gdy okno przekroczy skonfigurowany rozmiar.
-2. `calculate_common_sign_and_average` (`src/main_app.py:214`) wybiera **najczęstszy** znak w oknie (głosowanie większościowe) i raportuje **średni wynik** tego znaku w całym oknie.
+2. `calculate_common_sign_and_average` (`src/main_app.py:219`) wybiera **najczęstszy** znak w oknie (głosowanie większościowe) i raportuje **średni wynik próbek sklasyfikowanych jako ten znak**.
 
 Zmniejszenie okna poniżej bieżącej liczby zapamiętanych wyników czyści okno, aby uniknąć nieaktualnych głosów.
 
@@ -138,7 +139,7 @@ Tworzy `QApplication`, konfiguruje `logging` (poziom INFO, UTF-8), nakłada arku
 | `calculate_common_sign_and_average()` | Głosowanie większościowe + średni wynik w oknie przesuwnym |
 | `closeEvent(event)` | Uporządkowane zwolnienie zasobów |
 
-Modelem domyślnym jest `models/gesture_recognizer_asl_0.task`, rozwiązywany **względem katalogu roboczego `src/`** (`MODEL_PATH = '../models/...'`, `src/main_app.py:9`).
+Modelem domyślnym jest `models/gesture_recognizer_asl_0.task`. Jego ścieżka bezwzględna jest wyznaczana z katalogu repozytorium dla kodu źródłowego albo z katalogu pakietu PyInstaller dla wydania, więc start nie zależy od katalogu roboczego wywołującego.
 
 ### 4.3 `src/camera.py` — `CameraApp`
 
@@ -162,7 +163,7 @@ Hermetyzuje API MediaPipe Tasks:
 - `recognize_frame()` pobiera świeżą klatkę z `CameraApp`, pomija nieaktualne znaczniki czasu, opakowuje tablicę w `mediapipe.Image(SRGB)` i wywołuje `recognize_async`.
 - `handle_result()` nanosi adnotacje na klatkę, oblicza FPS, emituje `result_ready_signal` i — dopóki rozpoznawanie istnieje — planuje kolejne `recognize_frame()`, domykając pętlę.
 - `process_recognition_result()` konwertuje punkty charakterystyczne pierwszej wykrytej dłoni do protobufa `NormalizedLandmarkList` i rysuje je funkcją `mp.solutions.drawing_utils.draw_landmarks`, korzystając z niestandardowych stylów z `custom_landmarks.py`. Z wyniku wyodrębnia nazwy i wyniki `[gest, ręczność]`.
-- `create_scaled_qpixmap()` konwertuje klatkę NumPy z adnotacjami na `QPixmap`, skalując do 640×480 (z zachowaniem proporcji, szybka transformacja) tylko wtedy, gdy rozdzielczość źródłowa jest inna.
+- `create_scaled_qimage()` kopiuje klatkę NumPy z adnotacjami do odłączonego `QImage`, skalując do 640×480 (z zachowaniem proporcji, szybka transformacja) tylko wtedy, gdy rozdzielczość źródłowa jest inna.
 
 ### 4.5 `src/custom_landmarks.py`
 
@@ -173,8 +174,8 @@ Definiuje wygląd szkieletu dłoni: punkty śródręcza (zielone), stawy palców
 Synteza mowy offline oparta na `pyttsx3`:
 
 - Inicjalizuje silnik z konfigurowalnym tempem (słowa na minutę) i głośnością (0.0–1.0).
-- Domyślnie wybiera głos SAPI5 **Microsoft Zira (en-US)** (stała `ENGINE` z tokenem rejestru, `src/speaker.py:5`) — głos angielski, odpowiadający angielskim nazwom liter.
-- `speak(text)` serializuje dostęp blokadą; jeśli poprzednia wypowiedź jeszcze trwa, ustawiane jest zdarzenie zatrzymania i silnik jest zatrzymywany w wywołaniu zwrotnym `finished-utterance`, po czym nowy wątek wykonuje `engine.say + runAndWait`.
+- Wybiera głos SAPI5 **Microsoft Zira (en-US)**, gdy jest zainstalowany; w przeciwnym razie zachowuje domyślny głos platformy udostępniony przez pyttsx3.
+- `speak(text)` serializuje dostęp blokadą i uruchamia wątek demona dla `engine.say + runAndWait`. Żądania odebrane podczas działania tego wątku są pomijane, co zapobiega równoczesnemu użyciu silnika pyttsx3 z częstotliwością klatek kamery.
 - `stop()` czeka na zakończenie działającego wątku i zatrzymuje silnik (używane przy rekonfiguracji i zamykaniu).
 
 ### 4.7 `src/gui.py` / `src/gui.ui`
@@ -189,7 +190,7 @@ Okno zawiera podgląd wideo (`label_displayFrame`, 640×480), panel wyników (ro
 
 ## 5. Potok treningu modelu
 
-Własny model trenowany jest w Google Colab przy użyciu **MediaPipe Model Maker** (notatnik: [`notebooks/Custom_gesture_recognizer.ipynb`](../notebooks/Custom_gesture_recognizer.ipynb), eksport skryptowy: `notebooks/custom_gesture_recognizer.py`).
+Własny model trenowany jest w Google Colab przy użyciu **MediaPipe Model Maker** (notatnik: [`notebooks/Custom_gesture_recognizer.ipynb`](../notebooks/Custom_gesture_recognizer.ipynb)). `notebooks/custom_gesture_recognizer.py` jest eksportem źródła z Colaba i zawiera polecenia powłoki notatnika, dlatego nie jest samodzielnym skryptem Pythona.
 
 ### 5.1 Zbiór danych
 
@@ -215,7 +216,7 @@ Częścią trenowaną jest w pełni połączona głowica klasyfikacyjna nad zamr
 
 ### 5.3 Ewaluacja i eksport
 
-Po treningu model jest oceniany na wydzielonym zbiorze testowym (`model.evaluate`, batch 16) z raportowaniem straty i dokładności; przebiegi z poszczególnych epok zebrane podczas eksperymentów znajdują się w pliku [`docs/epoch_data.ods`](epoch_data.ods). Model eksportowany jest poleceniem `model.export_model()` do pakietu TensorFlow Lite **`.task`** (detektor dłoni + model punktów charakterystycznych + własny klasyfikator), a etykiety poleceniem `model.export_labels`.
+Po treningu model jest oceniany na wydzielonym zbiorze testowym (`model.evaluate`, batch 16). Output zachowany w notatniku podaje **stratę testową 0,0228** i **dokładność testową 98,18%** dla udokumentowanego przebiegu. Przebiegi z poszczególnych epok zebrane podczas eksperymentów znajdują się w pliku [`docs/epoch_data.ods`](epoch_data.ods). Model eksportowany jest poleceniem `model.export_model()` do pakietu TensorFlow Lite **`.task`** (detektor dłoni + model punktów charakterystycznych + własny klasyfikator), a etykiety poleceniem `model.export_labels`.
 
 ### 5.4 Modele dołączone do repozytorium
 
@@ -269,17 +270,32 @@ python -m venv venv
 # aktywuj venv, następnie:
 python -m pip install --upgrade pip
 python -m pip install -r src/requirements.txt
-cd src
-python main.py
+python src/main.py
 ```
 
-`run_venv.bat` / `run_venv.ps1` automatyzują aktywację i uruchomienie w Windows (oczekują środowiska w `./venv`). `src/setup.sh` instaluje zależności w systemach POSIX.
+`scripts/run_venv.bat` / `scripts/run_venv.ps1` automatyzują aktywację i uruchomienie w Windows (oczekują środowiska w `./venv`). `scripts/setup.sh` instaluje zależności w systemach POSIX.
+
+`src/requirements.txt` wybiera lokalnie poprawiony wheel protobuf odpowiedni
+dla platformy: oficjalny wariant binarny UPB z naniesioną poprawką parsera na
+Windows x64 z Pythonem 3.10+ albo fallback pure-Python w pozostałych
+środowiskach. Wejścia, patche, sumy SHA-256 i deterministyczne polecenie
+odtworzenia opisano w
+[`third_party/protobuf/README.md`](../third_party/protobuf/README.md). Zestaw
+testów sprawdza limit rekurencji zagnieżdżonych komunikatów `Any` naprawiony
+przez patch.
 
 ### 7.2 Wymagania środowiska uruchomieniowego
 
-- Katalogiem roboczym musi być `src/` (ścieżki względne do modelu domyślnego i zasobów).
+- `src/main.py` przechodzi do katalogu aplikacji przed zbudowaniem GUI, a ścieżka modelu domyślnego jest rozwiązywana niezależnie; launcher można więc wywołać z dowolnego katalogu roboczego.
 - W Windows domyślnym backendem przechwytywania jest DirectShow; w Linuksie należy wybrać V4L2 lub GStreamer z listy *Drivers*.
-- Domyślny głos TTS to głos SAPI5 *Zira* z Windows; w innych systemach pyttsx3 korzysta z silnika platformy (espeak/NSSpeechSynthesizer) i stała głosu w `src/speaker.py:5` może wymagać zmiany.
+- Aplikacja używa głosu SAPI5 *Zira* w Windows, gdy jest zainstalowany, a w przeciwnym razie zachowuje domyślny głos udostępniany przez silnik platformy pyttsx3 (SAPI5/espeak/NSSpeechSynthesizer).
+
+### 7.3 Wydanie wykonywalne dla Windows
+
+`scripts/build_windows_release.ps1` wymaga Pythona 3.10, uruchamia zestaw
+testów i buduje aplikację przez PyInstaller. Tworzy archiwum ZIP dla Windows x64
+w `dist/release/`, z aplikacją, modelami i zależnościami w `app/` oraz launcherami,
+licencjami i metadanymi budowy w katalogu głównym pakietu.
 
 ## 8. Znane ograniczenia i możliwe rozszerzenia
 
@@ -295,4 +311,3 @@ python main.py
 - Modele czasowe (np. LSTM/transformer na sekwencjach punktów charakterystycznych) umożliwiające obsługę znaków dynamicznych.
 - Składanie słów: łączenie rozpoznanych liter w wyrazy z buforem tekstowym na ekranie i korekcją słownikową.
 - Wsparcie innych narodowych alfabetów migowych (np. PJM) po ponownym treningu na odpowiednim zbiorze danych.
-- Pakowanie do samodzielnego pliku wykonywalnego (PyInstaller) dla użytkowników końcowych.

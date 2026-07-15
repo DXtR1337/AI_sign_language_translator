@@ -36,7 +36,8 @@ The recognizable classes are the **24 static letters of the ASL alphabet** (A–
 | Layer | Technology | Role |
 |---|---|---|
 | Language | Python 3.9–3.12 | Application logic |
-| ML inference | [MediaPipe Tasks](https://ai.google.dev/edge/mediapipe) ≥ 0.10.14 (`GestureRecognizer`) | Hand detection, tracking and gesture classification (TFLite) |
+| ML inference | [MediaPipe Tasks](https://ai.google.dev/edge/mediapipe) ≥ 0.10.14, < 0.10.30 (`GestureRecognizer`) | Hand detection, tracking and gesture classification (TFLite) |
+| Serialization | Locally patched protobuf 4.25.9 | MediaPipe messages; parser-fix backport, using the UPB wheel on Windows x64/Python 3.10+ and a pure-Python fallback elsewhere |
 | ML training | MediaPipe Model Maker, TensorFlow 2 (Google Colab) | Training of the custom classification head |
 | Video I/O | OpenCV (`cv2.VideoCapture`, installed as a MediaPipe dependency) | Camera capture and backend management |
 | GUI | PySide6 ≥ 6.7.3 (Qt for Python), QDarkStyle ≥ 3.2.3 | Main window, video preview, settings panels, dark theme |
@@ -69,7 +70,7 @@ flowchart TB
     APP -->|creates / configures| CAM
     APP -->|creates / configures| REC
     APP -->|creates / configures| TTS
-    REC -->|"result_ready_signal (QPixmap, text, scores, fps)"| APP
+    REC -->|"result_ready_signal (QImage, text, scores, fps)"| APP
     APP -->|"speak(letter)"| TTS
 ```
 
@@ -93,7 +94,7 @@ sequenceDiagram
     R->>MP: recognize_async(mp.Image, ts_ms)
     MP-->>R: handle_result(result, image, ts)
     Note over R: draw landmarks, compute FPS
-    R--)M: result_ready_signal.emit(pixmap, text, scores, fps)
+    R--)M: result_ready_signal.emit(image, text, scores, fps)
     Note over M: sliding-window voting,<br/>update labels & progress bars
     M--)T: speak(letter)  [if enabled]
     R->>R: recognize_frame()  → next iteration
@@ -101,10 +102,10 @@ sequenceDiagram
 
 Key details:
 
-- **Frame ordering** — MediaPipe requires monotonically increasing timestamps. `CameraApp.read()` stamps each frame with `time.time_ns()`; `recognize_frame()` (`src/recognizer.py:137`) discards frames whose timestamp is not newer than the last one processed, then converts nanoseconds to milliseconds for `recognize_async`.
-- **Thread-safe UI updates** — `handle_result` runs on a MediaPipe thread, so it never touches widgets directly. Instead it emits `result_ready_signal` (a `Signal(object, list, list, int)`); Qt automatically queues the connection to the main thread, where `MainApp.process_result_and_frame` updates the UI.
-- **FPS measurement** — computed every 5 processed frames as `5 / Δt` (`calculate_fps`, `src/recognizer.py:126`).
-- **TTS concurrency** — `SpeakerApp.speak` runs each utterance on a fresh `threading.Thread`, guarded by a lock and a stop event so a new letter can interrupt the previous utterance (`src/speaker.py`).
+- **Frame ordering** — MediaPipe requires monotonically increasing timestamps. `CameraApp.read()` stamps each frame with `time.time_ns()`; `recognize_frame()` (`src/recognizer.py:140`) discards frames whose timestamp is not newer than the last one processed, then converts nanoseconds to milliseconds for `recognize_async`.
+- **Thread-safe UI updates** — `handle_result` runs on a MediaPipe thread, so it creates a detached `QImage` and never touches widgets or `QPixmap`. It emits `result_ready_signal` (a `Signal(object, list, list, int)`); Qt queues the connection to the main thread, where `MainApp.process_result_and_frame` converts the image to `QPixmap` and updates the UI.
+- **FPS measurement** — computed every 5 processed frames as `5 / Δt` (`calculate_fps`, `src/recognizer.py:129`).
+- **TTS concurrency** — `SpeakerApp.speak` runs an accepted utterance on a daemon `threading.Thread`. A lock prevents multiple calls to `pyttsx3.runAndWait()` at once; frame-level requests received while speech is already in progress are ignored rather than queued (`src/speaker.py`).
 - **Shutdown** — `MainApp.closeEvent` disconnects the signal, closes the recognizer, releases the camera and stops the TTS engine, in that order.
 
 ### 3.3 Result post-processing (smoothing)
@@ -112,7 +113,7 @@ Key details:
 Raw per-frame classifications flicker. When the *Average sign* checkbox is enabled, `MainApp` maintains a **sliding window** (`last_results`) of the most recent `(sign, score)` pairs, bounded by the GUI slider value:
 
 1. `calculate_results_length` evicts the oldest entry once the window exceeds the configured size.
-2. `calculate_common_sign_and_average` (`src/main_app.py:214`) selects the **most frequent** sign in the window (majority vote) and reports the **average score** of that sign across the window.
+2. `calculate_common_sign_and_average` (`src/main_app.py:219`) selects the **most frequent** sign in the window (majority vote) and reports the **average score of the samples classified as that sign**.
 
 Shrinking the window below the current number of stored results clears the window to avoid stale votes.
 
@@ -138,7 +139,7 @@ Creates the `QApplication`, configures `logging` (INFO level, UTF-8), applies th
 | `calculate_common_sign_and_average()` | Majority vote + average score over the sliding window |
 | `closeEvent(event)` | Orderly resource release |
 
-The default model is `models/gesture_recognizer_asl_0.task`, resolved **relative to the `src/` working directory** (`MODEL_PATH = '../models/...'`, `src/main_app.py:9`).
+The default model is `models/gesture_recognizer_asl_0.task`. Its absolute path is derived from the repository root in source runs or from PyInstaller's bundle directory in packaged runs, so startup does not depend on the caller's working directory.
 
 ### 4.3 `src/camera.py` — `CameraApp`
 
@@ -162,7 +163,7 @@ Encapsulates the MediaPipe Tasks API:
 - `recognize_frame()` pulls a fresh frame from `CameraApp`, skips stale timestamps, wraps the array in `mediapipe.Image(SRGB)` and calls `recognize_async`.
 - `handle_result()` annotates the frame, computes FPS, emits `result_ready_signal` and — as long as the recognizer exists — schedules the next `recognize_frame()`, closing the loop.
 - `process_recognition_result()` converts the landmarks of the first detected hand into a `NormalizedLandmarkList` protobuf and draws them with `mp.solutions.drawing_utils.draw_landmarks`, using the custom styles from `custom_landmarks.py`. It extracts `[gesture, handedness]` names and scores from the result.
-- `create_scaled_qpixmap()` converts the annotated NumPy frame to a `QPixmap`, downscaling to 640×480 (aspect-ratio preserving, fast transformation) only when the source resolution differs.
+- `create_scaled_qimage()` copies the annotated NumPy frame into a detached `QImage`, downscaling to 640×480 (aspect-ratio preserving, fast transformation) only when the source resolution differs.
 
 ### 4.5 `src/custom_landmarks.py`
 
@@ -173,8 +174,8 @@ Defines the visual style of the hand skeleton: palm landmarks (green), finger jo
 Offline TTS based on `pyttsx3`:
 
 - Initializes the engine with a configurable rate (words per minute) and volume (0.0–1.0).
-- Selects the **Microsoft Zira (en-US)** SAPI5 voice by default (registry token constant `ENGINE`, `src/speaker.py:5`) — an English voice matching the English letter names.
-- `speak(text)` serializes access with a lock; if a previous utterance is still playing, a stop event is set and the engine is stopped from the `finished-utterance` callback, then a new daemon-style thread runs `engine.say + runAndWait`.
+- Selects the **Microsoft Zira (en-US)** SAPI5 voice when that voice is installed; otherwise it keeps the platform's default pyttsx3 voice.
+- `speak(text)` serializes access with a lock and starts a daemon thread for `engine.say + runAndWait`. Requests arriving while that thread is active are ignored, which prevents concurrent access to the pyttsx3 engine at camera frame rate.
 - `stop()` joins the running thread and halts the engine (used on reconfiguration and shutdown).
 
 ### 4.7 `src/gui.py` / `src/gui.ui`
@@ -189,7 +190,7 @@ The window contains the video preview (`label_displayFrame`, 640×480), the resu
 
 ## 5. Model training pipeline
 
-The custom model is trained in Google Colab with **MediaPipe Model Maker** (notebook: [`notebooks/Custom_gesture_recognizer.ipynb`](../notebooks/Custom_gesture_recognizer.ipynb), script export: `notebooks/custom_gesture_recognizer.py`).
+The custom model is trained in Google Colab with **MediaPipe Model Maker** (notebook: [`notebooks/Custom_gesture_recognizer.ipynb`](../notebooks/Custom_gesture_recognizer.ipynb)). `notebooks/custom_gesture_recognizer.py` is a Colab source export and contains notebook shell commands, so it is not a standalone Python script.
 
 ### 5.1 Dataset
 
@@ -215,7 +216,7 @@ The trainable part is a fully-connected classification head on top of the frozen
 
 ### 5.3 Evaluation and export
 
-After training, the model is evaluated on the held-out test split (`model.evaluate`, batch 16) reporting loss and accuracy; per-epoch curves gathered during the experiments are stored in [`docs/epoch_data.ods`](epoch_data.ods). The model is exported with `model.export_model()` to a TensorFlow Lite **`.task` bundle** (hand detector + hand landmarker + custom classifier) and the labels with `model.export_labels`.
+After training, the model is evaluated on the held-out test split (`model.evaluate`, batch 16). The output preserved in the notebook reports **test loss 0.0228** and **test accuracy 98.18%** for the documented run. Per-epoch curves gathered during the experiments are stored in [`docs/epoch_data.ods`](epoch_data.ods). The model is exported with `model.export_model()` to a TensorFlow Lite **`.task` bundle** (hand detector + hand landmarker + custom classifier) and the labels with `model.export_labels`.
 
 ### 5.4 Shipped models
 
@@ -269,17 +270,30 @@ python -m venv venv
 # activate the venv, then:
 python -m pip install --upgrade pip
 python -m pip install -r src/requirements.txt
-cd src
-python main.py
+python src/main.py
 ```
 
-`run_venv.bat` / `run_venv.ps1` automate activation and launch on Windows (they expect the venv in `./venv`). `src/setup.sh` installs the dependencies on POSIX systems.
+`scripts/run_venv.bat` / `scripts/run_venv.ps1` automate activation and launch on Windows (they expect the venv in `./venv`). `scripts/setup.sh` installs the dependencies on POSIX systems.
+
+`src/requirements.txt` selects the locally patched protobuf wheel appropriate
+for the platform: the official UPB binary with the parser fix applied on
+Windows x64 with Python 3.10+, or a pure-Python fallback elsewhere. The inputs,
+patches, SHA-256 checksums and deterministic rebuild command are documented in
+[`third_party/protobuf/README.md`](../third_party/protobuf/README.md). The
+regression suite verifies the nested-`Any` recursion limit fixed by the patch.
 
 ### 7.2 Runtime requirements
 
-- The working directory must be `src/` (relative paths to the default model and assets).
+- `src/main.py` changes to the application directory before constructing the GUI, while the default model path is resolved independently; the launcher can therefore be called from any working directory.
 - On Windows the default capture backend is DirectShow; on Linux choose V4L2 or GStreamer from the *Drivers* combo box.
-- The default TTS voice targets the Windows SAPI5 *Zira* voice; on other systems pyttsx3 falls back to the platform engine (espeak/NSSpeechSynthesizer), and the voice constant in `src/speaker.py:5` may need adjustment.
+- The application uses the Windows SAPI5 *Zira* voice when installed and otherwise keeps the default voice provided by pyttsx3's platform engine (SAPI5/espeak/NSSpeechSynthesizer).
+
+### 7.3 Windows executable release
+
+`scripts/build_windows_release.ps1` requires Python 3.10, runs the regression
+suite and builds the application with PyInstaller. It creates a Windows x64 ZIP
+under `dist/release/`, with the executable, models and runtime dependencies in
+`app/` and launchers plus license and build metadata at the package root.
 
 ## 8. Known limitations and possible extensions
 
@@ -295,4 +309,3 @@ python main.py
 - Temporal models (e.g. LSTM/transformer over landmark sequences) to support dynamic signs.
 - Word composition: assembling recognized letters into words with an on-screen text buffer and dictionary correction.
 - Support for other national sign alphabets (e.g. PJM) by retraining on a suitable dataset.
-- Packaging as a standalone executable (PyInstaller) for end users.

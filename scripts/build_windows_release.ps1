@@ -93,10 +93,7 @@ try {
             -Destination (Join-Path $ReleaseApp $Directory) -Recurse
     }
     foreach ($File in @("README.md", "README.pl.md")) {
-        $SourceFile = Join-Path $RepositoryRoot $File
-        if (Test-Path -LiteralPath $SourceFile) {
-            Copy-Item -LiteralPath $SourceFile -Destination $ReleaseApp
-        }
+        Copy-Item -LiteralPath (Join-Path $RepositoryRoot $File) -Destination $ReleaseApp
     }
     foreach ($File in @("LICENSE", "LICENSE-docs", "SECURITY.md")) {
         Copy-Item -LiteralPath (Join-Path $RepositoryRoot $File) -Destination $ReleaseRoot
