@@ -5,8 +5,12 @@ from gui import *
 from speaker import SpeakerApp
 from camera import *
 import logging
+from pathlib import Path
+import sys
 
-MODEL_PATH = '../models/gesture_recognizer_asl_0.task'
+
+PROJECT_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
+MODEL_PATH = str(PROJECT_ROOT / 'models' / 'gesture_recognizer_asl_0.task')
 
 
 class MainApp(QMainWindow, Ui_MainWindow):

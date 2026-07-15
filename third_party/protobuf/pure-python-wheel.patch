@@ -1,0 +1,28 @@
+diff --git a/setup.cfg b/setup.cfg
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -2 +2 @@
+-universal = 1
++universal = 0
+diff --git a/setup.py b/setup.py
+--- a/setup.py
++++ b/setup.py
+@@ -68,17 +68,6 @@ setup(
+     namespace_packages=['google'],
+     packages=find_packages(),
+     install_requires=[],
+-    ext_modules=[
+-        Extension(
+-            'google._upb._message',
+-            glob.glob('google/protobuf/*.c')
+-            + glob.glob('python/*.c')
+-            + glob.glob('upb/**/*.c', recursive=True)
+-            + glob.glob('utf8_range/*.c'),
+-            include_dirs=[current_dir, os.path.join(current_dir, 'utf8_range')],
+-            language='c',
+-            extra_link_args=extra_link_args,
+-        )
+-    ],
++    ext_modules=[],
+     python_requires='>=3.8',
+ )

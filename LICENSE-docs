@@ -1,0 +1,27 @@
+Documentation & Thesis License
+==============================
+
+Copyright (c) 2025 Kamil Rataj.
+
+The written thesis (the PDF in `docs/`) and all original documentation,
+diagrams, and screenshots authored by Kamil Rataj in this repository are
+licensed under the:
+
+    Creative Commons Attribution-NonCommercial-NoDerivatives 4.0
+    International License (CC BY-NC-ND 4.0)
+
+You are free to share (copy and redistribute) these materials in any medium,
+provided that you:
+
+  - give appropriate credit to the author (Attribution),
+  - do not use them for commercial purposes (NonCommercial), and
+  - do not distribute modified versions (NoDerivatives).
+
+Full legal text: https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode
+
+Note: third-party logos and marks that may appear in the documentation
+(e.g. OpenCV, MediaPipe, Qt, PyCharm, Google Colab, Kaggle) remain the
+property of their respective owners and are not covered by this license.
+
+The source CODE in this repository is licensed separately — see LICENSE
+(GNU General Public License v3.0).

@@ -1,0 +1,6 @@
+diff --git a/google/protobuf/__init__.py b/google/protobuf/__init__.py
+--- a/google/protobuf/__init__.py
++++ b/google/protobuf/__init__.py
+@@ -10,1 +10,1 @@
+-__version__ = '4.25.9'
++__version__ = '4.25.9+aislt.cve20260994.1'

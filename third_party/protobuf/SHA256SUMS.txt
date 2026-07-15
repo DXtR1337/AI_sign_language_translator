@@ -1,0 +1,4 @@
+b0dc7e7c68de8b1ce831dacb12fb407e838edbb8b6cc0dc3a2a6b4cbf6de9cff  protobuf-4.25.9.tar.gz
+3683c05154252206f7cb2d371626514b3708199d9bcf683b503dabf3a2e38e06  protobuf-4.25.9-cp310-abi3-win_amd64.whl
+c3e1802c5b81b5164b895a4fa552551e6aece856ec7aa9e8b93c38ac1d8fa4b3  ../wheels/protobuf-4.25.9+aislt.cve20260994.1-cp310-abi3-win_amd64.whl
+ee988f1e7649e5500b9ef14906bef0757b91f271572067819a75384c4f6b7c0c  ../wheels/protobuf-4.25.9+aislt.cve20260994.1-py3-none-any.whl
