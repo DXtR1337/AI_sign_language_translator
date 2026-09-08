@@ -86,7 +86,7 @@ sequenceDiagram
     participant R as GestureRecognizerApp
     participant C as CameraApp
     participant MP as MediaPipe worker thread
-    participant T as SpeakerApp (TTS thread)
+    participant T as SpeakerApp (TTS worker thread)
 
     M->>R: create_recognizer() + recognize_frame()
     R->>C: read()
@@ -107,7 +107,7 @@ Key details:
 - **Thread-safe UI updates** — `handle_result` runs on a MediaPipe thread, so it creates a detached `QImage` and never touches widgets or `QPixmap`. It emits `result_ready_signal` (a `Signal(object, list, list, int)`); Qt queues the connection to the main thread, where `MainApp.process_result_and_frame` converts the image to `QPixmap` and updates the UI.
 - **Recovery and backpressure** — only one `recognize_async()` call may be pending. Callback completion queues the next capture on the Qt thread; failed reads or submissions retry after 50 ms without blocking the GUI.
 - **FPS measurement** — computed after each complete 5-frame sample window as `5 / Δt` (`calculate_fps`, `src/recognizer.py`).
-- **TTS concurrency** — `SpeakerApp.speak` runs an accepted utterance on a daemon `threading.Thread`. A lock prevents multiple calls to `pyttsx3.runAndWait()` at once; frame-level requests received while speech is already in progress are ignored rather than queued (`src/speaker.py`).
+- **TTS concurrency** — `SpeakerApp` runs a single long-lived daemon worker thread that owns the pyttsx3 engine for its whole lifetime and drives its external event loop (`startLoop(False)` plus periodic `iterate()`), waiting for the `finished-utterance` callback before it takes the next text; this also avoids a pyttsx3 2.99 `runAndWait()` regression that cancelled every utterance after the first. `speak(text)` is non-blocking: it enqueues the text, and pending requests are coalesced so only the newest one is spoken; requests are ignored while the worker is not running (`src/speaker.py`).
 - **Shutdown** — `MainApp.closeEvent` disconnects the signal, closes the recognizer, releases the camera and stops the TTS engine, in that order.
 
 ### 3.3 Result post-processing (smoothing)
@@ -177,8 +177,8 @@ Offline TTS based on `pyttsx3`:
 
 - Initializes the engine with a configurable rate (words per minute) and volume (0.0–1.0).
 - Selects the **Microsoft Zira (en-US)** SAPI5 voice when that voice is installed; otherwise it keeps the platform's default pyttsx3 voice.
-- `speak(text)` serializes access with a lock and starts a daemon thread for `engine.say + runAndWait`. Requests arriving while that thread is active are ignored, which prevents concurrent access to the pyttsx3 engine at camera frame rate.
-- `stop()` joins the running thread and halts the engine (used on reconfiguration and shutdown).
+- A single long-lived daemon worker thread owns the pyttsx3 engine for its whole lifetime, creating it directly via `pyttsx3.engine.Engine()` (bypassing `pyttsx3.init()`'s cache) so SAPI5's end-of-utterance COM event, delivered only to the thread that created the engine, always reaches it. Instead of calling `runAndWait()` per utterance, the worker drives pyttsx3's external event loop (`startLoop(False)` plus periodic `iterate()`) and waits for the `finished-utterance` callback, with a safety timeout; this keeps one loop alive for the whole engine lifetime and avoids a pyttsx3 2.99 regression in which `runAndWait()` cancelled every utterance after the first. `speak(text)` is non-blocking: it enqueues the text, coalescing pending requests so only the newest is spoken, and is ignored while the worker is not running.
+- `stop()` clears pending requests, interrupts the engine and asks the worker to exit, joining it with a 2 s timeout, so the GUI waits at most that long for the worker (interrupting the engine is itself a synchronous COM call); it is idempotent and returns `True` if the worker did not exit in time (used on reconfiguration and shutdown).
 
 ### 4.7 `src/gui.py` / `src/gui.ui`
 

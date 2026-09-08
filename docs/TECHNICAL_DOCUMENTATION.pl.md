@@ -86,7 +86,7 @@ sequenceDiagram
     participant R as GestureRecognizerApp
     participant C as CameraApp
     participant MP as Wątek roboczy MediaPipe
-    participant T as SpeakerApp (wątek TTS)
+    participant T as SpeakerApp (wątek roboczy TTS)
 
     M->>R: create_recognizer() + recognize_frame()
     R->>C: read()
@@ -107,7 +107,7 @@ Najważniejsze szczegóły:
 - **Bezpieczne wątkowo aktualizacje UI** — `handle_result` działa w wątku MediaPipe, więc tworzy odłączony od tablicy źródłowej `QImage` i nie używa widżetów ani `QPixmap`. Następnie emituje `result_ready_signal` (`Signal(object, list, list, int)`); Qt kolejkuje połączenie do wątku głównego, gdzie `MainApp.process_result_and_frame` konwertuje obraz do `QPixmap` i aktualizuje interfejs.
 - **Odzyskiwanie i backpressure** — jednocześnie może oczekiwać tylko jedno `recognize_async()`. Callback kolejkuje następny odczyt w wątku Qt, a nieudany odczyt lub wysłanie jest ponawiane po 50 ms bez blokowania GUI.
 - **Pomiar FPS** — obliczany po każdym pełnym oknie 5 klatek jako `5 / Δt` (`calculate_fps`, `src/recognizer.py`).
-- **Współbieżność TTS** — `SpeakerApp.speak` uruchamia zaakceptowaną wypowiedź w wątku demona `threading.Thread`. Blokada zapobiega równoczesnym wywołaniom `pyttsx3.runAndWait()`; żądania z kolejnych klatek odebrane w trakcie trwającej wypowiedzi są ignorowane, a nie kolejkowane (`src/speaker.py`).
+- **Współbieżność TTS** — `SpeakerApp` uruchamia jeden długożyjący wątek roboczy będący demonem, który przez cały czas życia jest właścicielem silnika pyttsx3 i obsługuje jego zewnętrzną pętlę zdarzeń (`startLoop(False)` oraz cykliczne `iterate()`), czekając na callback `finished-utterance`, zanim pobierze kolejny tekst; pozwala to również uniknąć regresji `runAndWait()` w pyttsx3 2.99, która anulowała każdą wypowiedź po pierwszej. `speak(text)` nie blokuje wywołującego: dodaje tekst do kolejki, a oczekujące żądania są redukowane tak, że wypowiadany jest tylko najnowszy tekst; żądania są ignorowane, gdy wątek roboczy nie działa (`src/speaker.py`).
 - **Zamykanie** — `MainApp.closeEvent` odłącza sygnał, zamyka rozpoznawanie, zwalnia kamerę i zatrzymuje silnik TTS — w tej kolejności.
 
 ### 3.3 Przetwarzanie końcowe wyników (wygładzanie)
@@ -177,8 +177,8 @@ Synteza mowy offline oparta na `pyttsx3`:
 
 - Inicjalizuje silnik z konfigurowalnym tempem (słowa na minutę) i głośnością (0.0–1.0).
 - Wybiera głos SAPI5 **Microsoft Zira (en-US)**, gdy jest zainstalowany; w przeciwnym razie zachowuje domyślny głos platformy udostępniony przez pyttsx3.
-- `speak(text)` serializuje dostęp blokadą i uruchamia wątek demona dla `engine.say + runAndWait`. Żądania odebrane podczas działania tego wątku są pomijane, co zapobiega równoczesnemu użyciu silnika pyttsx3 z częstotliwością klatek kamery.
-- `stop()` czeka na zakończenie działającego wątku i zatrzymuje silnik (używane przy rekonfiguracji i zamykaniu).
+- Jeden długożyjący wątek roboczy będący demonem jest właścicielem silnika pyttsx3 przez cały czas jego życia — tworzy go bezpośrednio przez `pyttsx3.engine.Engine()` (z pominięciem pamięci podręcznej `pyttsx3.init()`), dzięki czemu zdarzenie końca wypowiedzi COM z SAPI5, dostarczane wyłącznie do wątku, który utworzył silnik, zawsze do niego dociera. Zamiast wywoływać `runAndWait()` dla każdej wypowiedzi, wątek roboczy obsługuje zewnętrzną pętlę zdarzeń pyttsx3 (`startLoop(False)` oraz cykliczne `iterate()`) i czeka na callback `finished-utterance`, z zabezpieczającym limitem czasu; dzięki temu przez cały czas życia silnika działa jedna pętla, co pozwala uniknąć regresji w pyttsx3 2.99, w której `runAndWait()` anulowało każdą wypowiedź po pierwszej. `speak(text)` nie blokuje wywołującego: dodaje tekst do kolejki, redukując oczekujące żądania tak, że wypowiadany jest tylko najnowszy, i jest ignorowane, gdy wątek roboczy nie działa.
+- `stop()` czyści oczekujące żądania, przerywa działanie silnika i prosi wątek roboczy o zakończenie, czekając na niego z limitem 2 s, dzięki czemu GUI czeka na wątek roboczy najwyżej tyle czasu (samo przerwanie silnika jest synchronicznym wywołaniem COM); jest idempotentne i zwraca `True`, gdy wątek roboczy nie zakończył się w tym czasie (używane przy rekonfiguracji i zamykaniu).
 
 ### 4.7 `src/gui.py` / `src/gui.ui`
 
