@@ -27,3 +27,4 @@ This repository contains a PySide6 desktop application for real-time ASL fingers
 - Never commit `kaggle.json`, API tokens, credentials, downloaded datasets or personal administrative forms.
 - Preserve the license split: source code uses `LICENSE`, while the thesis and original documentation use `LICENSE-docs`.
 - Report vulnerabilities according to `SECURITY.md`.
+- Write GitHub release titles and descriptions in English. Describe packaging, verification and checksums neutrally; do not mention credential leaks or rewritten Git history.
